@@ -184,11 +184,7 @@ public:
    }
    // One thread per independent softmax vector (row).
    // numRows  = total elements / axisSize
-   // axisSize = shape[axis]
-   // axisStride = product of dims after axis (= iStride in CPU impl)
-   // For each row r: outer = r / axisStride, inner = r % axisStride
-   //   base = outer * axisSize * axisStride + inner
-   //   elements: base, base + axisStride, ..., base + (axisSize-1)*axisStride
+
    std::string Generate_GPU_Kernel_ALPAKA(std::string /*opName*/) override {
       std::string op;
       op = "\n//------ SOFTMAX_KERNEL_ALPAKA\n";
@@ -196,21 +192,43 @@ public:
       op += SP + "template<typename TAcc, typename T>\n";
       op += SP + "ALPAKA_FN_ACC void operator()(TAcc const & acc, T const* __restrict__ data, T* __restrict__ out,\n";
       op += SP + SP + "std::size_t numRows, std::size_t axisSize, std::size_t axisStride) const {\n";
-      op += SP + SP + "for (auto row : alpaka::uniformElements(acc, numRows)) {\n";
-      op += SP + SP + SP + "std::size_t outer = row / axisStride;\n";
-      op += SP + SP + SP + "std::size_t inner = row % axisStride;\n";
-      op += SP + SP + SP + "std::size_t base  = outer * axisSize * axisStride + inner;\n";
-      op += SP + SP + SP + "T vmax = data[base];\n";
-      op += SP + SP + SP + "for (std::size_t i = 1; i < axisSize; ++i)\n";
-      op += SP + SP + SP + SP + "if (data[base + i * axisStride] > vmax) vmax = data[base + i * axisStride];\n";
-      op += SP + SP + SP + "T sum = T(0);\n";
-      op += SP + SP + SP + "for (std::size_t i = 0; i < axisSize; ++i) {\n";
-      op += SP + SP + SP + SP + "out[base + i * axisStride] = exp(data[base + i * axisStride] - vmax);\n";
-      op += SP + SP + SP + SP + "sum += out[base + i * axisStride];\n";
-      op += SP + SP + SP + "}\n";
-      op += SP + SP + SP + "for (std::size_t i = 0; i < axisSize; ++i)\n";
-      op += SP + SP + SP + SP + "out[base + i * axisStride] /= sum;\n";
+      // one block per row, threads cooperate via shared memory
+      op += SP + SP + "auto const row      = alpaka::getIdx<alpaka::Grid, alpaka::Blocks>(acc)[0];\n";
+      op += SP + SP + "auto const tid      = alpaka::getIdx<alpaka::Block, alpaka::Threads>(acc)[0];\n";
+      op += SP + SP + "auto const blockDim = alpaka::getWorkDiv<alpaka::Block, alpaka::Threads>(acc)[0];\n";
+      op += SP + SP + "if (row >= numRows) return;\n";
+      op += SP + SP + "std::size_t outer = row / axisStride;\n";
+      op += SP + SP + "std::size_t inner = row % axisStride;\n";
+      op += SP + SP + "std::size_t base  = outer * axisSize * axisStride + inner;\n";
+      op += SP + SP + "auto& sdata = alpaka::declareSharedVar<T[256], __COUNTER__>(acc);\n";
+      // phase 1: parallel max reduction
+      op += SP + SP + "T lmax = -std::numeric_limits<T>::infinity();\n";
+      op += SP + SP + "for (std::size_t i = tid; i < axisSize; i += blockDim)\n";
+      op += SP + SP + SP + "if (data[base + i * axisStride] > lmax) lmax = data[base + i * axisStride];\n";
+      op += SP + SP + "sdata[tid] = lmax;\n";
+      op += SP + SP + "alpaka::syncBlockThreads(acc);\n";
+      op += SP + SP + "for (std::size_t s = blockDim / 2; s > 0; s >>= 1) {\n";
+      op += SP + SP + SP + "if (tid < s && sdata[tid + s] > sdata[tid]) sdata[tid] = sdata[tid + s];\n";
+      op += SP + SP + SP + "alpaka::syncBlockThreads(acc);\n";
       op += SP + SP + "}\n";
+      op += SP + SP + "T vmax = sdata[0];\n";
+      op += SP + SP + "alpaka::syncBlockThreads(acc);\n";
+      // phase 2: parallel exp + sum reduction
+      op += SP + SP + "T lsum = T(0);\n";
+      op += SP + SP + "for (std::size_t i = tid; i < axisSize; i += blockDim) {\n";
+      op += SP + SP + SP + "out[base + i * axisStride] = exp(data[base + i * axisStride] - vmax);\n";
+      op += SP + SP + SP + "lsum += out[base + i * axisStride];\n";
+      op += SP + SP + "}\n";
+      op += SP + SP + "sdata[tid] = lsum;\n";
+      op += SP + SP + "alpaka::syncBlockThreads(acc);\n";
+      op += SP + SP + "for (std::size_t s = blockDim / 2; s > 0; s >>= 1) {\n";
+      op += SP + SP + SP + "if (tid < s) sdata[tid] += sdata[tid + s];\n";
+      op += SP + SP + SP + "alpaka::syncBlockThreads(acc);\n";
+      op += SP + SP + "}\n";
+      op += SP + SP + "T total = sdata[0];\n";
+      // phase 3: normalize
+      op += SP + SP + "for (std::size_t i = tid; i < axisSize; i += blockDim)\n";
+      op += SP + SP + SP + "out[base + i * axisStride] /= total;\n";
       op += SP + "}\n};\n";
       return op;
    }
@@ -235,14 +253,9 @@ public:
 
       std::stringstream out;
       out << "\n//------ SOFTMAX_GPU_ALPAKA\n";
-      out << SP << "auto const elementsPerThread_" << fNX << " = Vec::all(static_cast<Idx>(1));\n";
-      out << SP << "auto const elementsPerGrid_" << fNX << " = Vec::all(Idx{" << numRows << "});\n";
-      out << SP << "alpaka::KernelCfg<Acc> const kernelCfg_" << fNX << " = {elementsPerGrid_" << fNX << ", elementsPerThread_" << fNX << "};\n";
-      out << SP << "auto const workDiv_" << fNX << " = alpaka::getValidWorkDiv(kernelCfg_" << fNX
-         << ", devAcc, softmaxKernel, alpaka::getPtrNative(deviceBuf_" << fNX
-         << "), alpaka::getPtrNative(deviceBuf_" << fNY
-         << "), static_cast<Idx>(" << numRows << "), static_cast<Idx>(" << axisSize
-         << "), static_cast<Idx>(" << axisStride << "));\n";
+      // one block per row, 256 threads per block for parallel reduction
+      out << SP << "alpaka::WorkDivMembers<Dim, Idx> workDiv_" << fNX
+          << "{Vec::all(Idx{" << numRows << "}), Vec::all(Idx{256}), Vec::all(Idx{1})};\n";
       out << SP << "alpaka::exec<Acc>(queue, workDiv_" << fNX
          << ", softmaxKernel, alpaka::getPtrNative(deviceBuf_" << fNX
          << "), alpaka::getPtrNative(deviceBuf_" << fNY
