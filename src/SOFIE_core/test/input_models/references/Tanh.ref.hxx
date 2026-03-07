@@ -5,3 +5,4 @@ namespace Tanh_ExpectedOutput{
         0.8739,  0.6714,  0.9373, -0.6982, -0.1946,  0.0411, -0.5125, -0.2464 
 	};
 } // namespace Tanh_ExpectedOutput
+} // namespace Tanh_ExpectedOutput

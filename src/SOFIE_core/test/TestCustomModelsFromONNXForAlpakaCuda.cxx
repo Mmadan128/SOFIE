@@ -23,6 +23,8 @@
 
 #include "Concat_0D_FromONNX_GPU_ALPAKA.hxx"
 #include "ScatterElements_FromONNX_GPU_ALPAKA.hxx"
+#include "BatchNorm_FromONNX_GPU_ALPAKA.hxx"
+#include "input_models/references/BatchNorm.ref.hxx"
 
 
 #include <alpaka/alpaka.hpp>
@@ -605,4 +607,46 @@ TEST_F(SofieAlpakaTest, ScatterElements)
     for (size_t i = 0; i < correct.size(); ++i){
         EXPECT_LE(std::abs(res_ptr[i] - correct[i]), TOLERANCE);
     }
+}
+
+TEST_F(SofieAlpakaTest, BatchNorm)
+{
+   constexpr float TOLERANCE = 1e-4f;
+
+   // Input X: seed=42, shape [1,3,2,2], row-major
+   std::vector<float> input({
+       0.496714f, -0.138264f,  0.647689f,  1.523030f,
+      -0.234153f, -0.234137f,  1.579213f,  0.767435f,
+      -0.469474f,  0.542560f, -0.463418f, -0.465730f
+   });
+
+   auto input_h = alpaka::allocBuf<float, Idx>(host, Ext1D::all(Idx{input.size()}));
+   float* input_ptr = reinterpret_cast<float*>(alpaka::getPtrNative(input_h));
+   for (Idx i = 0; i < (Idx)input.size(); ++i)
+      input_ptr[i] = input[i];
+
+   auto input_d = alpaka::allocBuf<float, Idx>(device, Ext1D::all(Idx{input.size()}));
+   alpaka::memcpy(queue, input_d, input_h);
+   alpaka::wait(queue);
+
+   auto result_h = alpaka::allocBuf<float, Idx>(host, Ext1D::all(Idx{12}));
+
+   {
+      SOFIE_BatchNorm::Session<alpaka::TagGpuCudaRt> session("BatchNorm_FromONNX_GPU_ALPAKA.dat");
+      auto result = session.infer(input_d);
+      alpaka::wait(queue);
+      cudaDeviceSynchronize();
+
+      alpaka::memcpy(queue, result_h, result);
+      alpaka::wait(queue);
+   }
+
+   float* res_ptr = reinterpret_cast<float*>(alpaka::getPtrNative(result_h));
+   constexpr size_t N = sizeof(BatchNorm_ExpectedOutput::outputs) / sizeof(float);
+   for (size_t i = 0; i < N; ++i) {
+      EXPECT_LE(std::abs(res_ptr[i] - BatchNorm_ExpectedOutput::outputs[i]), TOLERANCE)
+         << "mismatch at index " << i
+         << ": got " << res_ptr[i]
+         << ", expected " << BatchNorm_ExpectedOutput::outputs[i];
+   }
 }
