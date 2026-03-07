@@ -48,7 +48,7 @@ public:
    }
 
    void Initialize(RModel& model) override {
-      if (model.CheckIfTensorAlreadyExist(fNX) == false){   //input must be a graph input, or already initialized intermediate tensor
+      if (model.CheckIfTensorAlreadyExist(fNX) == false){   //input must be a graph input or preinitialized tensor
          throw std::runtime_error("TMVA SOFIE Elu Op Input Tensor is not found in model");
       }
       fShape = model.GetTensorShape(fNX);
@@ -72,6 +72,60 @@ public:
       out << SP << "}\n";
       return out.str();
    }
+
+   std::string Generate_GPU_Kernel_ALPAKA(std::string /*opName*/) override {
+      std::string op;
+      op = "\n//------ ELU_KERNEL_ALPAKA\n";
+      op += "struct EluKernel {\n";
+      op += SP + "template<typename TAcc, typename T>\n";
+      op += SP + "ALPAKA_FN_ACC void operator()(TAcc const & acc, T const* __restrict__ data, T* __restrict__ out, std::size_t numElements, T alpha) const {\n";
+      op += SP + SP + SP + "auto idx = alpaka::getIdx<alpaka::Grid, alpaka::Threads>(acc)[0];\n";
+      op += SP + SP + SP + "if (idx < numElements) {\n";
+      op += SP + SP + SP + "out[idx] = data[idx] >= T(0) ? data[idx] : alpha * (exp(data[idx]) - T(1));\n";
+      op += SP + SP + "}\n";
+      op += SP + "}\n";
+      op += "};\n";
+      return op;
+   }
+
+   std::string Generate_GPU_Kernel_Definitions_ALPAKA(std::string /*opName*/) override {
+      return "EluKernel eluKernel;\n";
+   }
+
+   std::string Generate_GPU_ALPAKA(std::string OpName) override {
+      OpName = "op_" + OpName;
+      if (fShape.empty()) {
+         throw std::runtime_error("TMVA SOFIE Operator Elu called to Generate without being initialized first");
+      }
+      std::stringstream out;
+      auto length = ConvertShapeToLength(fShape);
+      out << "\n//------ ELU_GPU_ALPAKA\n";
+      out << SP << "constexpr float " << OpName << "_alpha = " << std::setprecision(std::numeric_limits<float>::max_digits10) << falpha << ";\n";
+      out << SP << "auto const elementsPerThread_" << fNX << " = Vec::all(static_cast<Idx>(1));\n";
+      out << SP << "auto const elementsPerGrid_" << fNX << " = Vec::all(Idx{" << length << "});\n";
+      out << SP << "alpaka::KernelCfg<Acc> const kernelCfg_" << fNX << " = {elementsPerGrid_" << fNX << ", elementsPerThread_" << fNX << "};\n";
+      out << SP << "auto const workDiv_" << fNX << " = alpaka::getValidWorkDiv(kernelCfg_" << fNX << ", devAcc, eluKernel, alpaka::getPtrNative(deviceBuf_" << fNX
+         << "), alpaka::getPtrNative(deviceBuf_" << fNY << "), static_cast<Idx>(" << length << "), " << OpName << "_alpha);\n";
+      out << SP << "alpaka::exec<Acc>(queue, workDiv_" << fNX
+         << ", eluKernel, alpaka::getPtrNative(deviceBuf_" << fNX
+         << "), alpaka::getPtrNative(deviceBuf_" << fNY << "), static_cast<Idx>(" << length << "), " << OpName << "_alpha);\n";
+      return out.str();
+   }
+
+   std::string GetFusableOutputTensorName() override {
+      return fNY;
+   }
+
+   void UpdateFusableTensorName(std::string fusable_tensor_name, const std::function<void(const std::string&)>& removal_func){
+      removal_func(fNX);
+      removal_func(fNY);
+      fNX = fusable_tensor_name;
+      fNY = fusable_tensor_name;
+      fInputTensorNames[0] = fNX;
+      fOutputTensorNames[0] = fNY;
+   }
+
+   std::vector<std::string> GetStdLibs() override { return { std::string("cmath") }; }
 
 };
 
