@@ -1,6 +1,6 @@
 # Exercise 5 
 
-What I implemented:
+I implemented:
 
 - Added BatchNorm GPU support in `ROperator_BatchNormalization.hxx`:
   - `Generate_GPU_Kernel_ALPAKA`
