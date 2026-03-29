@@ -46,6 +46,8 @@ set(sources_headers
    SOFIE/ROperator_Expand.hxx
    SOFIE/ROperator_Erf.hxx
    SOFIE/ROperator_Swish.hxx
+    SOFIE/ROperator_Gelu.hxx
+    SOFIE/ROperator_HardSwish.hxx
    SOFIE/ROperator_Elu.hxx
    SOFIE/ROperator_Comparision.hxx
    SOFIE/ROperator_EyeLike.hxx

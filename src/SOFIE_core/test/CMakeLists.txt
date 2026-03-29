@@ -20,6 +20,17 @@ set(ALPAKA_BACKEND "cuda"
     CACHE STRING "Alpaka backend to test (cuda, cpu, hip, sycl)")
 set_property(CACHE ALPAKA_BACKEND PROPERTY STRINGS cuda cpu hip sycl)
 
+ROOTTEST_GENERATE_EXECUTABLE(
+  TestNewOperatorsUnit
+  TestNewOperatorsUnit.cxx
+  LIBRARIES SOFIE_core GTest::gtest GTest::gtest_main
+)
+
+ROOTTEST_ADD_TEST(
+  TestNewOperatorsUnit
+  EXEC ./TestNewOperatorsUnit
+)
+
 ############################################################################
 # Generate emitter sources
 ############################################################################

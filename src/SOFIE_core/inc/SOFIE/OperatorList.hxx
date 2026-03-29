@@ -28,6 +28,8 @@
 #include "SOFIE/ROperator_Expand.hxx"
 #include "SOFIE/ROperator_Gather.hxx"
 #include "SOFIE/ROperator_Swish.hxx"
+#include "SOFIE/ROperator_Gelu.hxx"
+#include "SOFIE/ROperator_HardSwish.hxx"
 #include "SOFIE/ROperator_Erf.hxx"
 #include "SOFIE/ROperator_Elu.hxx"
 #include "SOFIE/ROperator_Comparision.hxx"

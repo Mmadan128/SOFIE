@@ -81,6 +81,8 @@ set(sources_cxx
     src/ParseEinsum.cxx
     src/ParseRandom.cxx
     src/ParseScatterElements.cxx
+    src/ParseGelu.cxx
+    src/ParseHardSwish.cxx
     ${PROTO_SRCS}
   ${DEPENDENCIES}
     ${SOFIE_core}
